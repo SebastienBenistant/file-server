@@ -1,0 +1,254 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>File Server</title>
+  <script src="https://unpkg.com/htmx.org@2.0.4"></script>
+  <style>
+    :root { color-scheme: light dark; font: 16px/1.5 system-ui, sans-serif; }
+    body { margin: 0 auto; max-width: 960px; padding: 1.5rem; }
+    h1 { margin: 0 0 1rem; }
+    button, input { font: inherit; padding: .5rem .7rem; }
+    button { cursor: pointer; }
+    .toolbar, .root-list, .actions, .breadcrumbs { display: flex; flex-wrap: wrap; gap: .6rem; align-items: center; }
+    .panel { border: 1px solid #8886; border-radius: .6rem; margin: 1rem 0; padding: 1rem; }
+    .entry { align-items: center; border-bottom: 1px solid #8884; display: flex; gap: 1rem; justify-content: space-between; padding: .65rem 0; }
+    .entry:last-child { border-bottom: 0; }
+    .entry-name { overflow-wrap: anywhere; }
+    .muted { opacity: .7; }
+    #message { min-height: 1.5rem; }
+    #auth-panel[hidden], #workspace[hidden] { display: none; }
+    @media (max-width: 540px) { body { padding: 1rem; } .entry { align-items: flex-start; } }
+  </style>
+</head>
+<body>
+  <h1>File Server</h1>
+  <section id="auth-panel" class="panel" hidden>
+    <form id="auth-form">
+      <label for="token">Bearer token</label>
+      <input id="token" type="password" autocomplete="current-password" required>
+      <button type="submit">Connect</button>
+    </form>
+    <p id="auth-message" role="alert"></p>
+  </section>
+  <main id="workspace" hidden>
+    <section class="panel">
+      <div class="toolbar">
+        <strong>Roots</strong>
+        <div id="roots" class="root-list"></div>
+        <button id="disconnect" type="button" hidden>Disconnect</button>
+      </div>
+    </section>
+    <p id="message" role="status" aria-live="polite"></p>
+    <section id="browser" class="panel" aria-live="polite">
+      <p class="muted">Choose a configured root to browse.</p>
+    </section>
+    <section class="panel actions">
+      <form id="mkdir-form">
+        <label for="directory-name">New directory</label>
+        <input id="directory-name" name="name" required>
+        <button type="submit">Create</button>
+      </form>
+      <form id="upload-form">
+        <label for="files">Upload files</label>
+        <input id="files" name="files" type="file" multiple required>
+        <button type="submit">Upload</button>
+      </form>
+    </section>
+  </main>
+  <script>
+    const authPanel = document.querySelector("#auth-panel");
+    const workspace = document.querySelector("#workspace");
+    const message = document.querySelector("#message");
+    const rootList = document.querySelector("#roots");
+    const browser = document.querySelector("#browser");
+    const tokenKey = "file-server-token";
+    let authenticationRequired = false;
+    let activeRoot = null;
+    let activePath = "";
+
+    function token() {
+      return sessionStorage.getItem(tokenKey) || "";
+    }
+
+    function apiHeaders(extra = {}) {
+      const headers = { ...extra };
+      if (token()) headers.Authorization = `Bearer ${token()}`;
+      return headers;
+    }
+
+    async function request(url, options = {}) {
+      const response = await fetch(url, {
+        ...options,
+        headers: apiHeaders(options.headers || {})
+      });
+      if (!response.ok) {
+        const result = await response.json().catch(() => ({}));
+        if (response.status === 401) showAuthentication();
+        throw new Error(result.detail || `Request failed (${response.status})`);
+      }
+      return response;
+    }
+
+    function showAuthentication() {
+      authPanel.hidden = false;
+      workspace.hidden = true;
+      document.querySelector("#token").focus();
+    }
+
+    function displayWorkspace() {
+      authPanel.hidden = true;
+      workspace.hidden = false;
+      document.querySelector("#disconnect").hidden = !authenticationRequired;
+    }
+
+    function showError(error) {
+      if (authPanel.hidden) {
+        message.textContent = error.message;
+      } else {
+        document.querySelector("#auth-message").textContent = error.message;
+      }
+    }
+
+    async function connect() {
+      const response = await request("/api/roots");
+      const data = await response.json();
+      rootList.replaceChildren();
+      for (const root of data.roots) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.textContent = root.name;
+        button.addEventListener("click", () => navigate(root.id, ""));
+        rootList.append(button);
+      }
+      displayWorkspace();
+      document.querySelector("#auth-message").textContent = "";
+      message.textContent = data.roots.length ? "" : "No roots are configured. Set FILE_SERVER_ROOTS and restart the server.";
+      if (data.roots.length) await navigate(data.roots[0].id, "");
+    }
+
+    function configureHtmx() {
+      document.body.addEventListener("htmx:configRequest", event => {
+        if (token()) event.detail.headers.Authorization = `Bearer ${token()}`;
+      });
+      document.body.addEventListener("htmx:responseError", event => {
+        const detail = event.detail.xhr.responseText;
+        try {
+          const parsed = JSON.parse(detail);
+          message.textContent = parsed.detail || "Unable to load this directory.";
+        } catch {
+          message.textContent = "Unable to load this directory.";
+        }
+        if (event.detail.xhr.status === 401) showAuthentication();
+      });
+      document.body.addEventListener("htmx:afterSwap", event => {
+        if (event.detail.target === browser) {
+          const location = browser.querySelector("[data-entry-browser]");
+          if (location) {
+            activeRoot = location.dataset.root;
+            activePath = location.dataset.path;
+          }
+        }
+      });
+    }
+
+    async function navigate(root, path) {
+      activeRoot = root;
+      activePath = path;
+      message.textContent = "";
+      try {
+        await htmx.ajax("GET", entryUrl(root, path), { target: "#browser", swap: "innerHTML" });
+      } catch (error) {
+        showError(error);
+      }
+    }
+
+    function entryUrl(root, path) {
+      return `/ui/entries?root_id=${encodeURIComponent(root)}&path=${encodeURIComponent(path)}`;
+    }
+
+    document.body.addEventListener("click", async event => {
+      const button = event.target.closest("[data-download]");
+      if (!button) return;
+      try {
+        const response = await request(`/api/roots/${encodeURIComponent(activeRoot)}/download?path=${encodeURIComponent(button.dataset.download)}`);
+        const blob = await response.blob();
+        const link = document.createElement("a");
+        link.href = URL.createObjectURL(blob);
+        link.download = button.dataset.filename;
+        link.click();
+        setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+      } catch (error) {
+        showError(error);
+      }
+    });
+
+    document.querySelector("#auth-form").addEventListener("submit", async event => {
+      event.preventDefault();
+      sessionStorage.setItem(tokenKey, document.querySelector("#token").value);
+      try {
+        await connect();
+      } catch (error) {
+        showError(error);
+      }
+    });
+
+    document.querySelector("#disconnect").addEventListener("click", () => {
+      sessionStorage.removeItem(tokenKey);
+      showAuthentication();
+      message.textContent = "";
+    });
+
+    document.querySelector("#mkdir-form").addEventListener("submit", async event => {
+      event.preventDefault();
+      if (!activeRoot) return;
+      const form = new FormData(event.currentTarget);
+      try {
+        await request(`/api/roots/${encodeURIComponent(activeRoot)}/directories`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ path: activePath, name: form.get("name") })
+        });
+        event.currentTarget.reset();
+        await navigate(activeRoot, activePath);
+        message.textContent = "Directory created.";
+      } catch (error) {
+        showError(error);
+      }
+    });
+
+    document.querySelector("#upload-form").addEventListener("submit", async event => {
+      event.preventDefault();
+      if (!activeRoot) return;
+      const form = new FormData(event.currentTarget);
+      try {
+        await request(`/api/roots/${encodeURIComponent(activeRoot)}/uploads?path=${encodeURIComponent(activePath)}`, {
+          method: "POST",
+          body: form
+        });
+        event.currentTarget.reset();
+        await navigate(activeRoot, activePath);
+        message.textContent = "Upload complete.";
+      } catch (error) {
+        showError(error);
+      }
+    });
+
+    configureHtmx();
+    (async () => {
+      try {
+        const status = await fetch("/api/auth/status").then(response => response.json());
+        authenticationRequired = status.authentication_required;
+        if (authenticationRequired && !token()) {
+          showAuthentication();
+          return;
+        }
+        await connect();
+      } catch (error) {
+        showError(error);
+      }
+    })();
+  </script>
+</body>
+</html>

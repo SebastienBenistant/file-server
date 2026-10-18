@@ -1,0 +1,31 @@
+<div data-entry-browser data-root="{{ root_id }}" data-path="{{ path }}">
+  <nav class="breadcrumbs" aria-label="Breadcrumb">
+    {% for crumb in breadcrumbs %}
+    {% if not loop.last %}<button type="button" hx-get="/ui/entries?root_id={{ root_id|urlencode }}&amp;path={{ crumb.path|urlencode }}" hx-target="#browser" hx-swap="innerHTML">{{ crumb.label }}</button><span aria-hidden="true">/</span>
+    {% else %}<strong>{{ crumb.label }}</strong>{% endif %}
+    {% endfor %}
+  </nav>
+  {% if entries %}
+  <div>
+    {% for entry in entries %}
+    {% if not entry.name.startswith(".file-server-upload-") %}
+    <div class="entry">
+      <span class="entry-name">
+        {% if entry.type == "directory" %}
+        <button type="button" hx-get="/ui/entries?root_id={{ root_id|urlencode }}&amp;path={{ (path ~ ('/' if path else '') ~ entry.name)|urlencode }}" hx-target="#browser" hx-swap="innerHTML">📁 {{ entry.name }}</button>
+        {% else %}
+        <span>📄 {{ entry.name }}</span>
+        {% endif %}
+      </span>
+      {% if entry.type == "file" %}
+      <span class="muted">{{ entry.size }} bytes</span>
+      <button type="button" data-download="{{ path ~ ('/' if path else '') ~ entry.name }}" data-filename="{{ entry.name }}">Download</button>
+      {% endif %}
+    </div>
+    {% endif %}
+    {% endfor %}
+  </div>
+  {% else %}
+  <p class="muted">This directory is empty.</p>
+  {% endif %}
+</div>

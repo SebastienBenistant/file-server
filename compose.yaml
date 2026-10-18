@@ -1,0 +1,23 @@
+services:
+  file-server:
+    build:
+      context: .
+    image: file-server:local
+    restart: unless-stopped
+    user: "${PUID:-1000}:${PGID:-1000}"
+    environment:
+      FILE_SERVER_ROOTS: '{"shared":"/srv/files/shared","photos":"/srv/files/photos"}'
+      FILE_SERVER_TOKEN: "${FILE_SERVER_TOKEN:?Set FILE_SERVER_TOKEN in .env}"
+      FILE_SERVER_MAX_UPLOAD_BYTES: "${FILE_SERVER_MAX_UPLOAD_BYTES:-104857600}"
+    ports:
+      - "${FILE_SERVER_BIND:-0.0.0.0}:${FILE_SERVER_PORT:-8000}:8000"
+    volumes:
+      - ./data/shared:/srv/files/shared
+      - ./data/photos:/srv/files/photos
+    read_only: true
+    tmpfs:
+      - /tmp:size=512m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
